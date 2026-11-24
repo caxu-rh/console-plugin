@@ -46,6 +46,52 @@ function consoleDeploymentGeneration(): number {
   );
 }
 
+interface ClusterOperatorStatus {
+  status?: {
+    conditions?: { type: string; status: string }[];
+  };
+}
+
+function clusterOperatorStable(name: string): boolean {
+  const operator = JSON.parse(
+    runCommand('oc', ['get', `clusteroperator/${name}`, '-o', 'json']),
+  ) as ClusterOperatorStatus;
+  const conditions = operator.status?.conditions ?? [];
+  const condition = (type: string) => conditions.find((item) => item.type === type)?.status;
+  return (
+    condition('Available') === 'True' &&
+    condition('Progressing') === 'False' &&
+    condition('Degraded') === 'False'
+  );
+}
+
+// The console session cookie name contains the console deployment hash, so a
+// console rollout logs out every browser session. Wait for the console operator
+// and the console deployment to settle after the plugin patch.
+function waitForConsoleStable(): void {
+  const deadline = Date.now() + 10 * 60_000;
+  const stableFor = 3 * 60_000;
+  let lastGeneration = consoleDeploymentGeneration();
+  let stableSince = Date.now();
+
+  while (Date.now() < deadline) {
+    runCommand('sleep', ['5']);
+    const generation = consoleDeploymentGeneration();
+    const operatorsStable =
+      clusterOperatorStable('console') && clusterOperatorStable('authentication');
+    if (!operatorsStable || generation !== lastGeneration) {
+      lastGeneration = generation;
+      stableSince = Date.now();
+      continue;
+    }
+    if (Date.now() - stableSince >= stableFor) {
+      return;
+    }
+  }
+
+  throw new Error('The console did not stabilize before the E2E timeout.');
+}
+
 export function installHelmChart(): void {
   if (!PLUGIN_TEMPLATE_PULL_SPEC) {
     throw new Error('Set PLUGIN_TEMPLATE_PULL_SPEC to the plugin image before running E2E tests.');
@@ -114,6 +160,8 @@ export function installHelmChart(): void {
     'openshift-console',
     '--timeout=600s',
   ]);
+
+  waitForConsoleStable();
 
   mkdirSync(dirname(STATE_PATH), { recursive: true });
   writeFileSync(STATE_PATH, JSON.stringify({ helmPath } satisfies ChartState));
