@@ -6,22 +6,44 @@ const PLUGIN_NAME = 'partner-labs-console-plugin';
 // Defined in openshift/release ci-operator config as CYPRESS_PLUGIN_TEMPLATE_PULL_SPEC
 const PLUGIN_TEMPLATE_PULL_SPEC =
   process.env.PLUGIN_TEMPLATE_PULL_SPEC ?? process.env.CYPRESS_PLUGIN_TEMPLATE_PULL_SPEC;
+const PLUGIN_IMAGE_PULL_SECRET = process.env.PLUGIN_IMAGE_PULL_SECRET;
+const SKIP_PATCH_JOB = process.env.PLUGIN_SKIP_PATCH_JOB === 'true';
 
-const isLocalDevEnvironment = (process.env.BRIDGE_BASE_ADDRESS ?? 'http://localhost:9000').includes(
-  'localhost',
-);
 let chartInstalled = false;
+let helmPath = 'helm';
 
 function runCommand(command: string, args: string[] = []) {
-  return execFileSync(command, args, { timeout: 360000, encoding: 'utf-8' });
+  return execFileSync(command, args, { timeout: 1_800_000, encoding: 'utf-8' });
 }
 
-function installHelmChart(helmPath: string) {
+// Use an existing Helm 3 or Helm 4 installation. Fall back to the script used by
+// the OpenShift CI job when Helm is not on PATH.
+function resolveHelm(): string {
+  try {
+    const version = runCommand('helm', ['version', '--short']).trim();
+    if (/^v[34]\./.test(version)) {
+      return 'helm';
+    }
+  } catch {
+    // Fall through to the installer below.
+  }
+  console.log('No supported Helm installation was found, downloading it to /tmp');
+  runCommand('./install_helm.sh');
+  return '/tmp/helm';
+}
+
+function installHelmChart(helm: string) {
   if (!PLUGIN_TEMPLATE_PULL_SPEC) {
     throw new Error('Set PLUGIN_TEMPLATE_PULL_SPEC to the plugin image before running E2E tests.');
   }
 
-  const result = runCommand(helmPath, [
+  const pullSecretArgs = PLUGIN_IMAGE_PULL_SECRET
+    ? ['--set', `plugin.imagePullSecrets[0].name=${PLUGIN_IMAGE_PULL_SECRET}`]
+    : [];
+  // OKD uses a dummy cluster pull secret, so the chart's patcher image from
+  // registry.redhat.io cannot be pulled. Patch the console operator directly.
+  const patchArgs = SKIP_PATCH_JOB ? ['--set', 'plugin.jobs.patchConsoles.enabled=false'] : [];
+  const result = runCommand(helm, [
     'upgrade',
     '-i',
     PLUGIN_NAME,
@@ -29,8 +51,12 @@ function installHelmChart(helmPath: string) {
     '-n',
     PLUGIN_NAME,
     '--create-namespace',
+    '--timeout',
+    '10m',
     '--set',
     `plugin.image=${PLUGIN_TEMPLATE_PULL_SPEC}`,
+    ...patchArgs,
+    ...pullSecretArgs,
   ]);
   chartInstalled = true;
   console.log('Helm install:', result);
@@ -42,8 +68,29 @@ function installHelmChart(helmPath: string) {
     PLUGIN_NAME,
     `deploy/${PLUGIN_NAME}`,
     '-w',
-    '--timeout=300s',
+    '--timeout=600s',
   ]);
+
+  if (SKIP_PATCH_JOB) {
+    const generation = consoleDeploymentGeneration();
+    runCommand('oc', [
+      'patch',
+      'consoles.operator.openshift.io',
+      'cluster',
+      '--type=merge',
+      '-p',
+      `{"spec":{"plugins":["${PLUGIN_NAME}"]}}`,
+    ]);
+    // Wait for the console operator to start a new console rollout. Without
+    // this, the rollout check below can pass against the old console.
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (consoleDeploymentGeneration() > generation) {
+        break;
+      }
+      runCommand('sleep', ['5']);
+    }
+  }
+
   runCommand('oc', [
     'rollout',
     'status',
@@ -51,27 +98,34 @@ function installHelmChart(helmPath: string) {
     'deploy/console',
     '-n',
     'openshift-console',
-    '--timeout=300s',
+    '--timeout=600s',
   ]);
 }
 
-function deleteHelmChart(helmPath: string) {
-  const result = runCommand(helmPath, ['uninstall', PLUGIN_NAME, '-n', PLUGIN_NAME]);
+function deleteHelmChart(helm: string) {
+  const result = runCommand(helm, ['uninstall', PLUGIN_NAME, '-n', PLUGIN_NAME]);
   console.log('Helm uninstall:', result);
   runCommand('oc', ['delete', 'namespaces', PLUGIN_NAME]);
 }
 
+function consoleDeploymentGeneration(): number {
+  return Number(
+    runCommand('oc', [
+      'get',
+      'deployment/console',
+      '-n',
+      'openshift-console',
+      '-o',
+      'jsonpath={.metadata.generation}',
+    ]).trim(),
+  );
+}
+
 test.describe('Console plugin cards', () => {
   test.beforeAll(() => {
-    test.setTimeout(360_000);
-    if (!isLocalDevEnvironment) {
-      console.log('this is not a local env, installing helm');
-      runCommand('./install_helm.sh');
-      installHelmChart('/tmp/helm');
-    } else {
-      console.log('this is a local env, not installing helm');
-      installHelmChart('helm');
-    }
+    test.setTimeout(1_800_000);
+    helmPath = resolveHelm();
+    installHelmChart(helmPath);
   });
 
   test.afterEach(async ({ page }) => {
@@ -79,15 +133,11 @@ test.describe('Console plugin cards', () => {
   });
 
   test.afterAll(() => {
-    test.setTimeout(360_000);
+    test.setTimeout(600_000);
     if (!chartInstalled) {
       return;
     }
-    if (!isLocalDevEnvironment) {
-      deleteHelmChart('/tmp/helm');
-    } else {
-      deleteHelmChart('helm');
-    }
+    deleteHelmChart(helmPath);
   });
 
   test('opens the custom page card', async ({ page }) => {
