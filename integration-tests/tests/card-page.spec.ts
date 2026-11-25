@@ -35,13 +35,14 @@ test.describe('Console plugin cards', () => {
   test('opens the OpenShift Virtualization installation quick start', async ({ page }) => {
     await page.goto('/partner-labs-demos');
     await page.getByTestId('card-action-install-configure-ocpv-operator').click();
+    const drawer = page.getByTestId('quickstart drawer');
     await expect(
-      page.getByRole('heading', {
+      drawer.getByRole('heading', {
         name: 'Install and configure OpenShift Virtualization',
         exact: true,
       }),
     ).toBeVisible();
-    await expect(page.getByText('Open OperatorHub', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('Install the Operator', { exact: true })).toBeVisible();
   });
 
   test('opens the Windows golden images quick start', async ({ page }) => {
@@ -116,13 +117,14 @@ test.describe('Console plugin cards', () => {
   test('opens the LVM Storage Operator quick start', async ({ page }) => {
     await page.goto('/partner-labs-demos');
     await page.getByTestId('card-action-install-lvm-storage-operator').click();
+    const drawer = page.getByTestId('quickstart drawer');
     await expect(
-      page.getByRole('heading', {
+      drawer.getByRole('heading', {
         name: 'Install the LVM Storage Operator',
         exact: true,
       }),
     ).toBeVisible();
-    await expect(page.getByText('Identify a spare disk', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('Identify a spare disk', { exact: true })).toBeVisible();
   });
 
   test('opens the CLI YAML VM quick start', async ({ page }) => {
