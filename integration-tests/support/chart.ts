@@ -69,8 +69,8 @@ function clusterOperatorStable(name: string): boolean {
 // console rollout logs out every browser session. Wait for the console operator
 // and the console deployment to settle after the plugin patch.
 function waitForConsoleStable(): void {
-  const deadline = Date.now() + 10 * 60_000;
-  const stableFor = 3 * 60_000;
+  const deadline = Date.now() + 15 * 60_000;
+  const stableFor = 5 * 60_000;
   let lastGeneration = consoleDeploymentGeneration();
   let stableSince = Date.now();
 
