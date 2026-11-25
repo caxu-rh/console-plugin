@@ -38,6 +38,7 @@ test.describe('Console plugin cards', () => {
     const drawer = page.getByTestId('quickstart drawer');
     await expect(
       drawer.getByRole('heading', {
+        level: 2,
         name: 'Install and configure OpenShift Virtualization',
         exact: true,
       }),
@@ -120,6 +121,7 @@ test.describe('Console plugin cards', () => {
     const drawer = page.getByTestId('quickstart drawer');
     await expect(
       drawer.getByRole('heading', {
+        level: 2,
         name: 'Install the LVM Storage Operator',
         exact: true,
       }),
